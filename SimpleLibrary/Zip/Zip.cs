@@ -1,9 +1,11 @@
-﻿using Autofac;
+using Autofac;
 using ICSharpCode.SharpZipLib.Zip;
 using SimpleLibrary.Logger;
 using System;
 using System.Drawing;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace SimpleLibrary.Zip
 {
@@ -14,98 +16,146 @@ namespace SimpleLibrary.Zip
             InitLogger(builder);
         }
 
-        /// <summary>
-        /// 🔍 檢查並提示 S3 的下載網址內不可包含單引號 (')
-        /// </summary>
-        /// <param name="filePath">☁️ 準備上傳至 S3 的檔案路徑</param>
-        private void CheckS3Path(string filePath)
-        {
-            string path_ = filePath;
-            if (path_.Contains("'") == true)
-            {
-                // S3 的下載網址不能有 ' 分號
-                string error_ = $@"S3 的下載網址不能有 ' 分號 path = {path_}";
-                Print(error_, Color.OrangeRed);
-            }
-        }
-
-        /// <summary>
-        /// 🗜️ 將指定的目錄整體壓縮為 zip 檔案
-        /// </summary>
-        /// <param name="outputZipPath">📁 壓縮完成後要輸出的 zip 檔案路徑</param>
-        /// <param name="inputDirectory">📂 準備進行壓縮的來源目錄路徑</param>
         public void ZipTo(string outputZipPath, string inputDirectory)
         {
-            // 修正 S3 的下載網址不能有 ' 分號
-            CheckS3Path(outputZipPath);
-
-            ZipOutputStream zipStream_ = new ZipOutputStream(File.Create(outputZipPath));
-            zipStream_.SetLevel(9);
-
-            ZipFolder(inputDirectory, inputDirectory, zipStream_);
-
-            zipStream_.Finish();
-            zipStream_.Close();
+            ZipTo(outputZipPath, inputDirectory, null);
         }
 
-        /// <summary>
-        /// 🗜️ 執行特定目錄的壓縮作業
-        /// </summary>
-        /// <param name="rootFolder">📂 指定要壓縮的根目錄 (起始目錄)</param>
-        /// <param name="currentFolder">📂 目前正在處理的目錄</param>
-        /// <param name="zipStream">📝 ZipOutputStream 的參考實例</param>
-        private static void ZipFolder(string rootFolder, string currentFolder, ZipOutputStream zipStream)
+        public void ZipTo(string outputZipPath, string inputDirectory, IProgress<int> progress)
         {
-            string[] SubFolders_ = Directory.GetDirectories(currentFolder);
+            CheckFilePath(outputZipPath);
 
-            foreach (string Folder in SubFolders_)
+            ZipOutputStream zipStream = new ZipOutputStream(File.Create(outputZipPath));
+            zipStream.SetLevel(9);
+
+            string[] files = Directory.GetFiles(inputDirectory, "*", SearchOption.AllDirectories);
+            int totalFiles = files.Length;
+            int processedFiles = 0;
+
+            foreach (string file in files)
             {
-                ZipFolder(rootFolder, Folder, zipStream);
+                string relativePath = GetRelativePath(inputDirectory, file);
+                AddFileToZip(zipStream, relativePath, file);
+                processedFiles++;
+                progress?.Report((int)((double)processedFiles / totalFiles * 100));
             }
 
-            string relativePath_ = currentFolder.Substring(rootFolder.Length) + "/";
-
-            if (relativePath_.Length > 1)
-            {
-                ZipEntry dirEntry_;
-
-                dirEntry_ = new ZipEntry(relativePath_)
-                {
-                    DateTime = DateTime.Now
-                };
-            }
-
-            foreach (string file in Directory.GetFiles(currentFolder))
-            {
-                AddFileToZip(zipStream, relativePath_, file);
-            }
+            zipStream.Finish();
+            zipStream.Close();
         }
 
-        /// <summary>
-        /// 📄 將單一檔案加入至指定的 zip 壓縮檔內
-        /// </summary>
-        /// <param name="zipStream">📝 ZipOutputStream 的參考實例</param>
-        /// <param name="relativePath">🛣️ 檔案在壓縮包內的相對路徑</param>
-        /// <param name="file">📄 準備加入的新檔案</param>
+        public async Task ZipToAsync(string outputZipPath, string inputDirectory, CancellationToken cancellationToken = default)
+        {
+            await Task.Run(() => ZipTo(outputZipPath, inputDirectory), cancellationToken);
+        }
+
+        public async Task ZipToAsync(string outputZipPath, string inputDirectory, IProgress<int> progress, CancellationToken cancellationToken = default)
+        {
+            await Task.Run(() => ZipTo(outputZipPath, inputDirectory, progress), cancellationToken);
+        }
+
+        private static string GetRelativePath(string basePath, string fullPath)
+        {
+            if (!basePath.EndsWith(Path.DirectorySeparatorChar.ToString()))
+                basePath += Path.DirectorySeparatorChar;
+            return fullPath.Substring(basePath.Length).Replace('\\', '/');
+        }
+
         private static void AddFileToZip(ZipOutputStream zipStream, string relativePath, string file)
         {
-            byte[] buffer_ = new byte[4096];
-            string fileRelativePath_ = (relativePath.Length > 1 ? relativePath : string.Empty) + Path.GetFileName(file);
-            ZipEntry entry_ = new ZipEntry(fileRelativePath_)
+            byte[] buffer = new byte[4096];
+            ZipEntry entry = new ZipEntry(relativePath)
             {
                 DateTime = DateTime.Now
             };
-            zipStream.PutNextEntry(entry_);
+            zipStream.PutNextEntry(entry);
 
             using (FileStream fs = File.OpenRead(file))
             {
-                int sourceBytes_;
-
+                int sourceBytes;
                 do
                 {
-                    sourceBytes_ = fs.Read(buffer_, 0, buffer_.Length);
-                    zipStream.Write(buffer_, 0, sourceBytes_);
-                } while (sourceBytes_ > 0);
+                    sourceBytes = fs.Read(buffer, 0, buffer.Length);
+                    zipStream.Write(buffer, 0, sourceBytes);
+                } while (sourceBytes > 0);
+            }
+        }
+
+        public void UnzipTo(string zipFilePath, string outputDirectory)
+        {
+            UnzipTo(zipFilePath, outputDirectory, null);
+        }
+
+        public void UnzipTo(string zipFilePath, string outputDirectory, IProgress<int> progress)
+        {
+            if (!File.Exists(zipFilePath))
+            {
+                Print($"Zip file not found: {zipFilePath}", Color.Red);
+                return;
+            }
+
+            if (!Directory.Exists(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
+
+            using (ZipFile zipFile = new ZipFile(zipFilePath))
+            {
+                int totalEntries = (int)zipFile.Count;
+                int processedEntries = 0;
+
+                foreach (ZipEntry entry in zipFile)
+                {
+                    if (entry.IsDirectory)
+                    {
+                        string dirPath = Path.Combine(outputDirectory, entry.Name);
+                        if (!Directory.Exists(dirPath))
+                        {
+                            Directory.CreateDirectory(dirPath);
+                        }
+                    }
+                    else
+                    {
+                        string filePath = Path.Combine(outputDirectory, entry.Name);
+                        string directory = Path.GetDirectoryName(filePath);
+                        if (!Directory.Exists(directory))
+                        {
+                            Directory.CreateDirectory(directory);
+                        }
+
+                        using (var inputStream = zipFile.GetInputStream(entry))
+                        using (var outputStream = new FileStream(filePath, FileMode.Create))
+                        {
+                            byte[] buffer = new byte[4096];
+                            int bytesRead;
+                            while ((bytesRead = inputStream.Read(buffer, 0, buffer.Length)) > 0)
+                            {
+                                outputStream.Write(buffer, 0, bytesRead);
+                            }
+                        }
+                    }
+                    processedEntries++;
+                    progress?.Report((int)((double)processedEntries / totalEntries * 100));
+                }
+                Print($"Extracted {totalEntries} files to {outputDirectory}", Color.Green);
+            }
+        }
+
+        public async Task UnzipToAsync(string zipFilePath, string outputDirectory, CancellationToken cancellationToken = default)
+        {
+            await Task.Run(() => UnzipTo(zipFilePath, outputDirectory), cancellationToken);
+        }
+
+        public async Task UnzipToAsync(string zipFilePath, string outputDirectory, IProgress<int> progress, CancellationToken cancellationToken = default)
+        {
+            await Task.Run(() => UnzipTo(zipFilePath, outputDirectory, progress), cancellationToken);
+        }
+
+        private void CheckFilePath(string filePath)
+        {
+            if (filePath.Contains("'"))
+            {
+                Print($"File path contains invalid character: {filePath}", Color.OrangeRed);
             }
         }
     }

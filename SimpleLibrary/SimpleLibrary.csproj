@@ -6,7 +6,7 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageLicenseUrl>https://github.com/chiisen/SimpleLibrary/blob/master/LICENSE</PackageLicenseUrl>
     <Copyright>MIT License</Copyright>
-    <Version>1.0.2</Version>
+    <Version>1.1.0</Version>
     <Company>My Company</Company>
     <PackageTags>AWS, S3, C#, .Net Standard, ZIP, GMail, Line</PackageTags>
     <Description>Upload zip files to the AWS S3 service
@@ -15,8 +15,8 @@ Line notifies users</Description>
     <NeutralLanguage>zh-TW</NeutralLanguage>
     <PackageIconUrl>https://chiisen.github.io/image/github.io/cat-icon.png</PackageIconUrl>
     <PackageProjectUrl>https://github.com/chiisen/SimpleLibrary</PackageProjectUrl>
-    <AssemblyVersion>1.0.1.1</AssemblyVersion>
-    <FileVersion>1.0.1.1</FileVersion>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">

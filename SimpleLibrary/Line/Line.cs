@@ -1,84 +1,233 @@
-﻿using Autofac;
+using Autofac;
 using Newtonsoft.Json;
 using SimpleLibrary.Logger;
 using System;
-using System.IO;
-using System.Net;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Net.Http;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace SimpleLibrary.Line
 {
     public class Line : PrintLogger
     {
-        private string _Url     = "";
-        private string _UserId  = "";        
-        private string _ApiKey  = "";
+        private string _Url = "";
+        private string _UserId = "";
+        private string _ApiKey = "";
+        private readonly HttpClient _httpClient;
 
         public Line(string url, string userId, string apiKey, ContainerBuilder builder = null)
         {
-            _Url    = url;
-            _UserId = userId;            
+            _Url = url;
+            _UserId = userId;
             _ApiKey = apiKey;
-
+            _httpClient = new HttpClient();
             InitLogger(builder);
         }
 
-        /// <summary>
-        /// 💬 傳送 Line Notify 的通知訊息
-        /// </summary>
-        /// <param name="message">📝 欲傳送的訊息內容字串</param>
         public void Notify(string message)
         {
-            string word_ = message;
-
-            //JSON
-            var msg_ = new
+            var msg = new Dictionary<string, object>
             {
-                to = _UserId,
-                messages = new[] {
-                    new {
-                        type = "text",
-                        text = word_
+                { "to", _UserId },
+                { "messages", new object[] {
+                    new Dictionary<string, string> {
+                        { "type", "text" },
+                        { "text", message }
                     }
-                }
+                }}
             };
-
-            //POST
-            string msgStr_ = JsonConvert.SerializeObject(msg_);
-            Uri myUri_ = new Uri(_Url);
-            var data_ = Encoding.UTF8.GetBytes(msgStr_);
-            SendRequest(myUri_, data_, "application/json", "POST", _ApiKey);
+            SendRequest(msg);
         }
 
-        /// <summary>
-        /// 🌐 透過 HTTP 請求的方式將資訊傳送給伺服器
-        /// </summary>
-        /// <param name="uri">🔗 目標 API 的 Uri 網址</param>
-        /// <param name="jsonDataBytes">📦 要傳送的 JSON 轉換成的位元組陣列</param>
-        /// <param name="contentType">🏷️ 傳送內容的格式類型 (例如 application/json)</param>
-        /// <param name="method">📤 請求的方法 (例如 POST)</param>
-        /// <param name="authorization">🔑 API 操作需要的授權碼 (Bearer Token)</param>
-        private static void SendRequest(Uri uri, byte[] jsonDataBytes, string contentType, string method, string authorization)
+        public void NotifyImage(string message, string imageUrl)
         {
-            WebRequest req_ = WebRequest.Create(uri);
+            var msg = new Dictionary<string, object>
             {
-                req_.ContentType = contentType;
-                req_.Method = method;
-                req_.ContentLength = jsonDataBytes.Length;
-                req_.Headers.Add("Authorization", $"Bearer {authorization}");
+                { "to", _UserId },
+                { "messages", new object[] {
+                    new Dictionary<string, string> {
+                        { "type", "text" },
+                        { "text", message }
+                    },
+                    new Dictionary<string, string> {
+                        { "type", "image" },
+                        { "originalContentUrl", imageUrl },
+                        { "previewImageUrl", imageUrl }
+                    }
+                }}
+            };
+            SendRequest(msg);
+        }
 
-                var stream = req_.GetRequestStream();
-                stream.Write(jsonDataBytes, 0, jsonDataBytes.Length);
-                stream.Close();
+        public void NotifySticker(string message, string packageId, string stickerId)
+        {
+            var msg = new Dictionary<string, object>
+            {
+                { "to", _UserId },
+                { "messages", new object[] {
+                    new Dictionary<string, string> {
+                        { "type", "text" },
+                        { "text", message }
+                    },
+                    new Dictionary<string, string> {
+                        { "type", "sticker" },
+                        { "packageId", packageId },
+                        { "stickerId", stickerId }
+                    }
+                }}
+            };
+            SendRequest(msg);
+        }
 
-                WebResponse response = req_.GetResponse();
+        public void NotifyWithActions(string message, List<LineAction> actions)
+        {
+            var quickReplyItems = new List<object>();
+            foreach (var a in actions)
+            {
+                var actionObj = new Dictionary<string, string>
                 {
-                    stream = response.GetResponseStream();
-                    var reader = new StreamReader(stream);
-                    reader.ReadToEnd();
-                }
+                    { "type", a.Type },
+                    { "label", a.Label }
+                };
+                if (!string.IsNullOrEmpty(a.Text))
+                    actionObj["text"] = a.Text;
+                if (!string.IsNullOrEmpty(a.Uri))
+                    actionObj["uri"] = a.Uri;
+
+                quickReplyItems.Add(new Dictionary<string, object>
+                {
+                    { "type", "action" },
+                    { "action", actionObj }
+                });
+            }
+
+            var msg = new Dictionary<string, object>
+            {
+                { "to", _UserId },
+                { "messages", new object[] {
+                    new Dictionary<string, object> {
+                        { "type", "text" },
+                        { "text", message },
+                        { "quickReply", new Dictionary<string, object> {
+                            { "items", quickReplyItems.ToArray() }
+                        }}
+                    }
+                }}
+            };
+            SendRequest(msg);
+        }
+
+        private void SendRequest(object msg)
+        {
+            try
+            {
+                string msgStr = JsonConvert.SerializeObject(msg);
+                var content = new StringContent(msgStr, Encoding.UTF8, "application/json");
+                var request = new HttpRequestMessage(HttpMethod.Post, _Url)
+                {
+                    Content = content
+                };
+                request.Headers.Add("Authorization", $"Bearer {_ApiKey}");
+
+                var response = _httpClient.Send(request);
+                response.EnsureSuccessStatusCode();
+            }
+            catch (Exception e)
+            {
+                Print($"Error sending LINE message: {e.Message}", Color.Red);
             }
         }
 
+        public async Task NotifyAsync(string message, CancellationToken cancellationToken = default)
+        {
+            var msg = new Dictionary<string, object>
+            {
+                { "to", _UserId },
+                { "messages", new object[] {
+                    new Dictionary<string, string> {
+                        { "type", "text" },
+                        { "text", message }
+                    }
+                }}
+            };
+            await SendRequestAsync(msg, cancellationToken);
+        }
+
+        public async Task NotifyImageAsync(string message, string imageUrl, CancellationToken cancellationToken = default)
+        {
+            var msg = new Dictionary<string, object>
+            {
+                { "to", _UserId },
+                { "messages", new object[] {
+                    new Dictionary<string, string> {
+                        { "type", "text" },
+                        { "text", message }
+                    },
+                    new Dictionary<string, string> {
+                        { "type", "image" },
+                        { "originalContentUrl", imageUrl },
+                        { "previewImageUrl", imageUrl }
+                    }
+                }}
+            };
+            await SendRequestAsync(msg, cancellationToken);
+        }
+
+        public async Task NotifyStickerAsync(string message, string packageId, string stickerId, CancellationToken cancellationToken = default)
+        {
+            var msg = new Dictionary<string, object>
+            {
+                { "to", _UserId },
+                { "messages", new object[] {
+                    new Dictionary<string, string> {
+                        { "type", "text" },
+                        { "text", message }
+                    },
+                    new Dictionary<string, string> {
+                        { "type", "sticker" },
+                        { "packageId", packageId },
+                        { "stickerId", stickerId }
+                    }
+                }}
+            };
+            await SendRequestAsync(msg, cancellationToken);
+        }
+
+        private async Task SendRequestAsync(object msg, CancellationToken cancellationToken)
+        {
+            try
+            {
+                string msgStr = JsonConvert.SerializeObject(msg);
+                var content = new StringContent(msgStr, Encoding.UTF8, "application/json");
+                var request = new HttpRequestMessage(HttpMethod.Post, _Url)
+                {
+                    Content = content
+                };
+                request.Headers.Add("Authorization", $"Bearer {_ApiKey}");
+
+                var response = await _httpClient.SendAsync(request, cancellationToken);
+                response.EnsureSuccessStatusCode();
+            }
+            catch (Exception e)
+            {
+                Print($"Error sending LINE message: {e.Message}", Color.Red);
+            }
+        }
+
+        public void Dispose()
+        {
+            _httpClient?.Dispose();
+        }
+    }
+
+    public class LineAction
+    {
+        public string Type { get; set; } = "message";
+        public string Label { get; set; }
+        public string Text { get; set; }
+        public string Uri { get; set; }
     }
 }

@@ -1,79 +1,170 @@
-﻿using Autofac;
+using Autofac;
 using SimpleLibrary.Logger;
+using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Mail;
+using System.Net.Mime;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace SimpleLibrary.GMail
 {
     public class GMail : PrintLogger
     {
-        /// <summary>
-        /// 📧 發信人的 Email 信箱地址
-        /// </summary>
         private readonly string _EmailAddress = "";
-
-        /// <summary>
-        /// 🔑 發信人的 Email 密碼或是應用程式專用密碼
-        /// </summary>
         private readonly string _EmailPassword = "";
+        private string _smtpHost = "smtp.gmail.com";
+        private int _smtpPort = 587;
 
         public GMail(string emailAddress, string emailPassword, ContainerBuilder builder = null)
         {
-            _EmailAddress  = emailAddress;
+            _EmailAddress = emailAddress;
             _EmailPassword = emailPassword;
+            InitLogger(builder);
+        }
 
+        public GMail(string emailAddress, string emailPassword, string smtpHost, int smtpPort, ContainerBuilder builder = null)
+        {
+            _EmailAddress = emailAddress;
+            _EmailPassword = emailPassword;
+            _smtpHost = smtpHost;
+            _smtpPort = smtpPort;
             InitLogger(builder);
         }
 
         public void SendMessage(string displayName, string subject, string body, List<string> ToAdd)
         {
-            MailMessage mailMessage_ = new MailMessage
+            SendMessage(displayName, subject, body, ToAdd, null, null);
+        }
+
+        public void SendMessage(string displayName, string subject, string body, List<string> ToAdd, 
+                                 List<string> attachments, Dictionary<string, string> inlineImages)
+        {
+            using (MailMessage mailMessage_ = new MailMessage())
             {
-                // 🧑‍💻 前面為發信人的 Email 網址，後面則為顯示名稱
-                From = new MailAddress(_EmailAddress, displayName)
-            };
+                mailMessage_.From = new MailAddress(_EmailAddress, displayName);
 
-            // 📬 加入所有收信者的 Email
-            for (int i = 0; i < ToAdd.Count; ++i)
-            {
-                mailMessage_.To.Add(ToAdd[i]);
-            }
-
-            if (mailMessage_.To.Count > 0)
-            {
-
-                // ⭐️ 設定信件的優先權
-                mailMessage_.Priority = MailPriority.Normal;
-
-                // 🏷️ 信件標題
-                mailMessage_.Subject = subject;
-
-                // 📝 信件內容
-                mailMessage_.Body = body;
-
-                // 🌐 設定內容是否支援使用 Html 標籤
-                mailMessage_.IsBodyHtml = true;
-
-                // 🚀 設定 Gmail 的 SMTP 伺服器 (這是 Google 提供的端點)
-                SmtpClient smtpClient_ = new SmtpClient("smtp.gmail.com", 587)
+                for (int i = 0; i < ToAdd.Count; ++i)
                 {
-                    // 🔑 輸入您在 Gmail 的帳號與授權密碼
-                    Credentials = new NetworkCredential(_EmailAddress, _EmailPassword),
+                    mailMessage_.To.Add(ToAdd[i]);
+                }
 
-                    // 🔒 開啟 SSL 加密連線
-                    EnableSsl = true
-                };
+                if (mailMessage_.To.Count > 0)
+                {
+                    mailMessage_.Priority = MailPriority.Normal;
+                    mailMessage_.Subject = subject;
+                    mailMessage_.IsBodyHtml = true;
 
-                // 📤 發送郵件
-                smtpClient_.Send(mailMessage_);
+                    if (inlineImages != null && inlineImages.Count > 0)
+                    {
+                        var htmlView = AlternateView.CreateAlternateViewFromString(body, null, "text/html");
+                        foreach (var kvp in inlineImages)
+                        {
+                            LinkedResource linkedImage = new LinkedResource(kvp.Key)
+                            {
+                                ContentId = kvp.Value
+                            };
+                            htmlView.LinkedResources.Add(linkedImage);
+                        }
+                        mailMessage_.AlternateViews.Add(htmlView);
+                        mailMessage_.Body = body;
+                    }
+                    else
+                    {
+                        mailMessage_.Body = body;
+                    }
 
-                // 🧹 釋放掉宣告出來的 SmtpClient 資源
-                smtpClient_ = null;
+                    if (attachments != null)
+                    {
+                        foreach (var attachmentPath in attachments)
+                        {
+                            if (System.IO.File.Exists(attachmentPath))
+                            {
+                                Attachment attachment = new Attachment(attachmentPath);
+                                mailMessage_.Attachments.Add(attachment);
+                            }
+                        }
+                    }
+
+                    using (SmtpClient smtpClient_ = new SmtpClient(_smtpHost, _smtpPort)
+                    {
+                        Credentials = new NetworkCredential(_EmailAddress, _EmailPassword),
+                        EnableSsl = true
+                    })
+                    {
+                        smtpClient_.Send(mailMessage_);
+                    }
+                }
             }
+        }
 
-            // 🧹 釋放掉宣告出來的 MailMessage 資源
-            mailMessage_.Dispose();
+        public async Task SendMessageAsync(string displayName, string subject, string body, List<string> ToAdd, 
+                                           CancellationToken cancellationToken = default)
+        {
+            await SendMessageAsync(displayName, subject, body, ToAdd, null, null, cancellationToken);
+        }
+
+        public async Task SendMessageAsync(string displayName, string subject, string body, List<string> ToAdd,
+                                           List<string> attachments, Dictionary<string, string> inlineImages,
+                                           CancellationToken cancellationToken = default)
+        {
+            using (MailMessage mailMessage_ = new MailMessage())
+            {
+                mailMessage_.From = new MailAddress(_EmailAddress, displayName);
+
+                for (int i = 0; i < ToAdd.Count; ++i)
+                {
+                    mailMessage_.To.Add(ToAdd[i]);
+                }
+
+                if (mailMessage_.To.Count > 0)
+                {
+                    mailMessage_.Priority = MailPriority.Normal;
+                    mailMessage_.Subject = subject;
+                    mailMessage_.IsBodyHtml = true;
+
+                    if (inlineImages != null && inlineImages.Count > 0)
+                    {
+                        var htmlView = AlternateView.CreateAlternateViewFromString(body, null, "text/html");
+                        foreach (var kvp in inlineImages)
+                        {
+                            LinkedResource linkedImage = new LinkedResource(kvp.Key)
+                            {
+                                ContentId = kvp.Value
+                            };
+                            htmlView.LinkedResources.Add(linkedImage);
+                        }
+                        mailMessage_.AlternateViews.Add(htmlView);
+                        mailMessage_.Body = body;
+                    }
+                    else
+                    {
+                        mailMessage_.Body = body;
+                    }
+
+                    if (attachments != null)
+                    {
+                        foreach (var attachmentPath in attachments)
+                        {
+                            if (System.IO.File.Exists(attachmentPath))
+                            {
+                                Attachment attachment = new Attachment(attachmentPath);
+                                mailMessage_.Attachments.Add(attachment);
+                            }
+                        }
+                    }
+
+                    using (SmtpClient smtpClient_ = new SmtpClient(_smtpHost, _smtpPort)
+                    {
+                        Credentials = new NetworkCredential(_EmailAddress, _EmailPassword),
+                        EnableSsl = true
+                    })
+                    {
+                        await smtpClient_.SendMailAsync(mailMessage_, cancellationToken);
+                    }
+                }
+            }
         }
     }
 }
